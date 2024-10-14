@@ -5,7 +5,10 @@ import authRoutes from "./routes/auth.route.js";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
-// console.log(process.env);
+
+app.use(express.json());
+
+connectDB();
 
 app.use("/api/auth", authRoutes);
 connectDB()
