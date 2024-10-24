@@ -1,4 +1,4 @@
-import { Redis } from "ioredis";
+import redis from "../lib/redis.js";
 import User from "../models/user.model.js";
 import jwt from "jsonwebtoken";
 
@@ -15,7 +15,7 @@ const generateTokens = (userId) => {
 };
 
 const storeRefreshTokens = async (userId, refreshToken) => {
-  await Redis.set(
+  await redis.set(
     `refresh_token:${userId}`,
     refreshToken,
     "EX",
@@ -54,8 +54,101 @@ export const signup = async (req, res) => {
     const { accessToken, refreshToken } = generateTokens(user._id);
     await storeRefreshTokens(user._id, refreshToken);
 
-    res.status(201).json({ message: "User created succesfully!" });
+    res.status(201).json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    });
   } catch (error) {
+    console.log("Error in signup controller :", error.message);
     res.status(500).json({ message: error.message });
+  }
+};
+
+export const login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
+
+    if (user && (await user.comparePassword(password))) {
+      const { accessToken, refreshToken } = generateTokens(user._id);
+
+      await storeRefreshTokens(user._id, refreshToken);
+      setCookies(res, accessToken, refreshToken);
+
+      res.json({
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      });
+    } else {
+      res.status(401).json({ message: "Invalid email or password!" });
+    }
+  } catch (error) {
+    console.log("Error in login controller :", error.message);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const logout = async (req, res) => {
+  try {
+    const refreshToken = req.cookies.refreshToken;
+    console.log(req.cookies);
+    if (refreshToken) {
+      const decoded = jwt.decode(
+        refreshToken,
+        process.env.REFRESH_TOKEN_SECRET
+      );
+      await redis.del(`refresh_token:${decoded.userId}`);
+    }
+
+    res.clearCookie("accessToken");
+    res.clearCookie("refreshToken");
+    res.json({ message: "Logged out successfully" });
+  } catch (error) {
+    console.log("Error in logout controller :", error.message);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// this will refresh the access token
+export const refreshAccessToken = async (req, res) => {
+  try {
+    const refreshToken = req.cookies.refreshToken;
+    console.log("token : ", req.cookies);
+
+    if (!refreshToken) {
+      return res.status(401).json({ message: "No refresh token provided!" });
+    }
+
+    const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
+    console.log("decoded tokens : ", decoded);
+
+    const storedToken = await redis.get(`refresh_token:${decoded.userId}`);
+
+    if (storedToken !== refreshToken) {
+      return res.status(401).json({ message: "Invalid refresh token!" });
+    }
+
+    const accessToken = jwt.sign(
+      { userId: decoded.userId },
+      process.env.ACCESS_TOKEN_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    res.cookie("accessToken", accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 15 * 60 * 1000,
+    });
+
+    res.json({ message: "Token refreshed successfully!" });
+  } catch (error) {
+    console.log("token : ", req.cookies);
+    console.log("Error in refreshToken controller :", error.message);
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };
